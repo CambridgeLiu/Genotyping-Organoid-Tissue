@@ -1,99 +1,25 @@
+# Genotyping using scATAC-seq data from patien-matched epithelial organoids and tissues
 
-# MOF Polymorph Generation and Free Energy Calculation
-Find the publication [here](https://pubs.acs.org/doi/full/10.1021/jacs.4c16341)
 
-## Prerequisites
+## Overview
 
-Create a conda env and install the dependencies
+This workflow performs genotype imputation from single-cell ATAC-seq data using GLIMPSE2. 
+It is designed to compare genetic concordance between patient-matched tissue and organoid samples.
 
-`conda create -n mof-topology`
+The pipeline includes:
+- Reference panel preparation
+- Genotype likelihood generation from scATAC-seq BAM files
+- Phasing and imputation using GLIMPSE2
+- Post-processing and merging of VCFs
+- Sample concordance analysis
 
-`conda install python=3.8 -y`
+## Caveats
 
-#### Install kernels for jupyter notebook
+-Coverage of scATAC-seq data and Markovian approximation. Genotype imputation from scATAC-seq data is inherently limited by sparse and uneven genomic coverage, as accessible chromatin regions represent only a small fraction of the genome (~2-3% of total DNA that captures >90% TF-bound regions). This results in incomplete and biased genotype likelihoods compared to bulk whole-genome sequencing. Additionally, GLIMPSE2 relies on a Markovian approximation of haplotype structure (Li–Stephens model), which assumes that local haplotypes can be represented as mosaic combination of reference haplotypes. While efficient, this approximation may be less accurate in regions with limited observed data (as in scATAC-seq) or in populations that are underrepresented in the reference panel.
+-Genome chunking and buffer region selection. GLIMPSE2 performs haplotype phasing and genotype imputation on discrete genomic chunks rather than chromosomes as a whole. At chunk boundaries, variants on one side have no flanking data on the other side within the same chunk. The buffer region compensates for this by extending the haplotype context available to the model, effectively allowing the exponential decay to accumulate sufficient information before reaching the true boundary of the input region. The choice of buffer size therefore involves a trade-off: if too small, there will be insufficient haplotype context at chunk boundaries, particularly for rare variants where long-range linkage disequilibrium is critical; if too large, increased computational cost per chunk with diminishing returns in accuracy, since the exponential decay ensures that variants beyond some distance contribute negligible additional information regardless. In this workflow, buffer regions were set to the GLIMPSE2 default, which has been shown to provide stable imputation accuracy across common and low-frequency variants for reference panels of the size used here. However, we do encourge other researchers to to evaluate the sensitivity of their results to buffer size.
+-Cellular compartment heterogeneity of organoid and tissue. Human intestinal tissue contains a complex mixture of cell types spanning multiple compartments, including epithelial, stromal, immune, and rarely neural populations, whereas intestinal organoids are predominantly composed of epithelial lineages derived from intestinal stem cells. In scATAC-seq data, chromatin accessibility reflects the regulatory landscape of each individual cell type. As a consequence, the fragments from organoid data may not fully represent the accessible regions present in non-epithelial cell populations in tissue, and vice versa. This compartment mismatch can affect the depth and distribution of sequencing reads available for genotyping, particularly in regulatory regions that are selectively open in stromal or immune cells.
 
-`conda install -c conda-forge ipykernel -y`
-
-`python -m ipykernel install --user --name=mof-topology`
-
-#### Pormake is used to build a MOF polymorph
-
-`pip install git+https://github.com/Sangwon91/PORMAKE.git`
-
-This version allows the partial charges assignment on the building nodes.
-
-#### LAMMPS-Interface is used to assign force field parameters
-
-`pip install lammps-interface`
-
-`pip install lammpsio`
-
-Originally cif2lammps and ToBaCCo are used for MOF generation (see folder simulation_utilities); for the automation purposes, the combination of pormake and lammps-interface seems to work better.
-
-## Compile LAMMPS
-
-LAMMPS version 22 Jun 2022 ([LAMMPS](https://github.com/lammps/lammps/releases/tag/stable_23Jun2022))
-
-```
-wget https://github.com/lammps/lammps/archive/refs/tags/stable_23Jun2022.tar.gz
-tar -xvf stable_23Jun2022.tar.gz
-```
-
-The following additional packages are required:
-
-```
-cd lammps-stable_23Jun2022/src
-make yes-molecule
-make yes-extra-fix
-make yes-extra-compute
-make yes-fep
-make yes-body
-make yes-kspace
-make yes-manybody
-make yes-rigid
-make yes-extra-molecule
-```
-
-Replace the `fix_ti_spring.cpp` in the `LAMMPS/src` folder with the provided one, which is slightly modified for the final NES step calculation, and compile. 
-
-```
-cp ../../fix_ti_spring.cpp .
-make mpi -j8 or make seriel -j8
-export LAMMPS_PATH=`pwd`/lmp_mpi
-```
-
-## Navigating the Repo
-
-There are three tutorial notebooks in the `example` folder showing the procedures for building MOF polymorphs and computing free energies. `example1`, `example2`, and `example3` include a ZJU-28 series MOF, a ZIF series MOF, and an Fe₄S₄-BDT series MOF, respectively. You can adapt the notebooks or use the command lines in the next section to run the pipeline.
-
-The `simulation_utilities` folder contains all the scripts for running free energy calculations on Fe₄S₄-BDT MOFs with different cations using the ToBaCCo codes and cif2lammps. This folder also includes guidelines for running simulations using this set of tools.
-
-The `databank_iron-sulfur-MOFs` folder includes all the relaxed structures of the iron-sulfur MOFs studied in the paper, along with computed free energies, potential energies, and geometric properties. The PDF files are stored in H5 files that can be accessed using `h5py`.
-
-## MOF Generation and Equilibration
-
-The `gen` command is used to generate a MOF polymorph, which requires a linker and a metal node in XYZ format. You can generate bare frameworks or specify a small molecule to add to an ionic MOF. If the name of the small molecule is available in the `small_molecule` folder (`DMA`, `TMA`, `TEA`, `TPA`, `TPP`, `MPA`, `MNP`), use those files. Otherwise, you need to provide a small molecule in CIF format with atomic charges.
-
-The `run_equi` command generates input files for small molecule deposition and equilibration. After equilibration, a CIF file of the equilibrated structure is provided, along with the potential energy at 300 K and 0 K for preliminary screening.
-
-Example:
-
-`python main.py gen --node 4c_In --linker 3c_BTB --topos pto --mol DMA`
-
-`python main.py run_equi --mof pto-4c_In-3c_BTB --mol DMA --n_mol 6 --nvt --npt --equi_time 50000 --temp 300 --pressure 0.0`
-
-This is a checkpoint where you can stop and use the equilibrated structures and potential energies to rank the thermodynamic stability of the MOFs.
-
-## Free Energy Calculation Workflow
-
-The equilibrated structures can be used for subsequent free energy calculations. The `run_fe` function is used to generate the input files for calculating the free energies of the MOFs. If a small molecule is used, it is required to specify the atom type of the molecules from the LAMMPS `emin` data file.
-
-Example:
-
-`python main.py run_fe --mof pto-4c_In-3c_BTB --mol DMA --center 7 --nproc 8`
-
-This will create a list of input files for running free energy simulations and create a folder for storing the output data.
-
-## Free Energy Integration
-
-The codes for integrating the free energy after the calculation is available in example 1. 
+## References
+-Klemm, S.L., Shipony, Z. & Greenleaf, W.J. Chromatin accessibility and the regulatory epigenome. Nat Rev Genet 20, 207–220 (2019). https://doi.org/10.1038/s41576-018-0089-8
+-Rubinacci, S., Hofmeister, R.J., Sousa da Mota, B. et al. Imputation of low-coverage sequencing data from 150,119 UK Biobank genomes. Nat Genet 55, 1088–1090 (2023). https://doi.org/10.1038/s41588-023-01438-3
+-Li N, Stephens M. Modeling linkage disequilibrium and identifying recombination hotspots using single-nucleotide polymorphism data. Genetics. 2003 Dec;165(4):2213-33. doi: 10.1093/genetics/165.4.2213.
